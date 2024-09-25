@@ -194,6 +194,29 @@ right1:
     ; Loop back to beginning...
 
 
+.program pio_i2s_full_duplex
+.side_set 2 ; 0 = bclk, 1 = wclk
+
+; The C code should place (number of bits/sample - 2) in Y and
+; update the SHIFTCTRL to be 24 or 32 as appropriate
+
+mov x, y        side 0b00
+left_loop:
+    in pins, 1  side 0b01
+    out pins, 1 side 0b00
+    jmp x--, left_loop side 0b01
+in  pins, 1     side 0b00
+out pins, 1     side 0b11 ; Last bit of left has WCLK change per I2S spec
+
+mov x, y        side 0b10
+right_loop:
+    in pins, 1  side 0b11
+    out pins, 1 side 0b10
+    jmp x--, right_loop side 0b11
+in  pins, 1     side 0b10
+out pins, 1     side 0b01 ; Last bit of right also has WCLK change
+
+; Loop back to beginning...
 
 
 % c-sdk {
@@ -297,6 +320,36 @@ static inline void pio_i2s_in_program_init(PIO pio, uint sm, uint offset, uint d
 
     pio_sm_exec(pio, sm, pio_encode_in(pio_pins, bits)); // Shift in 1st L data
     pio_sm_exec(pio, sm, pio_encode_in(pio_pins, bits - 1)); // Shift in 1st R data modulo one bit, avoiding bit shift from #2037
+}
+
+static inline void pio_i2s_full_duplex_program_init(PIO pio, uint sm, uint offset,
+                                                    uint data_pin_in, uint data_pin_out,
+                                                    uint clock_pin_base, uint bits) {
+    pio_gpio_init(pio, data_pin_in);
+    pio_gpio_init(pio, data_pin_out);
+    pio_gpio_init(pio, clock_pin_base);
+    pio_gpio_init(pio, clock_pin_base + 1);
+
+    pio_sm_config sm_config = pio_i2s_full_duplex_program_get_default_config(offset);
+
+    sm_config_set_in_pins(&sm_config, data_pin_in);
+    sm_config_set_out_pins(&sm_config, data_pin_out, 1);
+    sm_config_set_sideset_pins(&sm_config, clock_pin_base);
+
+    sm_config_set_in_shift(&sm_config, false, true, bits);
+    sm_config_set_out_shift(&sm_config, false, true, bits);
+
+    sm_config_set_fifo_join(&sm_config, PIO_FIFO_JOIN_TXRX);
+
+    pio_sm_init(pio, sm, offset, &sm_config);
+
+    pio_sm_set_consecutive_pindirs(pio, sm, data_pin_in, 1, false);
+    pio_sm_set_consecutive_pindirs(pio, sm, data_pin_out, 1, true);
+    pio_sm_set_consecutive_pindirs(pio, sm, clock_pin_base, 2, true);
+
+    pio_sm_set_pins(pio, sm, 0); // Clear pins
+
+    pio_sm_exec(pio, sm, pio_encode_set(pio_y, bits - 2));
 }
 
 %}
